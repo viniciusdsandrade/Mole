@@ -563,3 +563,144 @@ EOF
 
 	[[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
 }
+
+@test "cache refresh timeouts fail only the task while signals still propagate" {
+	run env HOME="$TEST_HOME/cache-timeout" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/optimize/tasks.sh"
+
+mkdir -p "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache" "$HOME/Library/Caches/com.apple.iconservices"
+touch "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache/test.db" "$HOME/Library/Caches/com.apple.iconservices/item"
+
+qlmanage() { return 0; }
+should_protect_path() { return 1; }
+get_path_size_kb() { return 124; }
+safe_remove() {
+    printf '%s\n' "$1" >> "$HOME/remove.trace"
+    if [[ "$1" == *"QuickLook"* ]]; then
+        return 124
+    fi
+    return 0
+}
+
+execute_optimization cache_refresh
+execute_optimization saved_state_cleanup
+
+[[ "$(optimize_outcome_total)" == "2" ]] || exit 1
+[[ "$(optimize_outcome_count failed)" == "1" ]] || exit 1
+[[ "$(optimize_outcome_count unchanged)" == "1" ]] || exit 1
+[[ "${OPTIMIZE_CACHE_CLEANED_KB:-missing}" == "0" ]] || exit 1
+[[ "$(wc -l < "$HOME/remove.trace" | tr -d ' ')" == "2" ]] || exit 1
+
+optimize_outcomes_reset
+safe_remove() { return 130; }
+optimize_task_start
+rc=0
+opt_cache_refresh || rc=$?
+[[ "$rc" -eq 130 ]]
+EOF
+
+	[[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+	[[ "$output" == *"Timed out removing 1 Finder cache target(s)"* ]] || return 1
+	[[ "$output" == *"App saved states optimized"* ]]
+}
+
+@test "saved state and shared file list scan or removal timeouts keep later tasks running" {
+	run env HOME="$TEST_HOME/scan-remove-timeout" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/optimize/tasks.sh"
+
+saved="$HOME/Library/Saved Application State/Slow.savedState"
+corrupt_sfl="$HOME/Library/Application Support/com.apple.sharedfilelist/Slow.sfl3"
+mkdir -p "$saved" "${corrupt_sfl%/*}"
+touch "$corrupt_sfl"
+should_protect_path() { return 1; }
+plutil() { return 1; }
+
+run_with_timeout() { return 124; }
+execute_optimization saved_state_cleanup
+execute_optimization shared_file_list_repair
+execute_optimization launch_agents_cleanup
+[[ "$(optimize_outcome_total)" == "3" ]] || exit 1
+[[ "$(optimize_outcome_count failed)" == "2" ]] || exit 1
+[[ "$(optimize_outcome_count unchanged)" == "1" ]] || exit 1
+
+optimize_outcomes_reset
+run_with_timeout() {
+    shift
+    case "$*" in
+        *"Saved Application State"*) printf '%s\0' "$saved" ;;
+        *) printf '%s\0' "$corrupt_sfl" ;;
+    esac
+}
+safe_remove() { return 124; }
+execute_optimization saved_state_cleanup
+execute_optimization shared_file_list_repair
+execute_optimization launch_agents_cleanup
+[[ "$(optimize_outcome_total)" == "3" ]] || exit 1
+[[ "$(optimize_outcome_count failed)" == "2" ]] || exit 1
+[[ "$(optimize_outcome_count unchanged)" == "1" ]] || exit 1
+
+optimize_outcomes_reset
+safe_remove() { return 130; }
+optimize_task_start
+rc=0
+opt_shared_file_list_repair || rc=$?
+[[ "$rc" -eq 130 ]]
+EOF
+
+	[[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+	[[ "$output" == *"Saved state scan timed out"* ]] || return 1
+	[[ "$output" == *"Shared file list scan timed out"* ]] || return 1
+	[[ "$output" == *"Timed out removing 1 old saved state(s)"* ]] || return 1
+	[[ "$output" == *"Timed out repairing 1 corrupted shared file list(s)"* ]] || return 1
+	[[ "$output" == *"Launch Agents all healthy"* ]] || return 1
+	[[ "$output" != *"App saved states optimized"* ]] || return 1
+	[[ "$output" != *"Shared file lists all healthy"* ]]
+}
+
+@test "launch agents cleanup warns on timed-out plists, finishes the run, and propagates signals" {
+	run env HOME="$TEST_HOME/launch-agents-timeout" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/optimize/tasks.sh"
+
+agents_dir="$HOME/Library/LaunchAgents"
+mkdir -p "$agents_dir"
+touch "$agents_dir/com.test.slow.plist" "$agents_dir/com.test.broken.plist"
+
+run_with_timeout() {
+    if [[ "$*" == *"com.test.slow.plist"* ]]; then
+        printf '%s\n' "$*" >> "$HOME/slow-calls.trace"
+        return 124
+    fi
+    case "$*" in
+        *"Print :ProgramArguments:0"*) return 1 ;;
+        *"Print :Program"*) printf '/nonexistent/missing_agent_binary\n' ;;
+        *"Print :Label"*) printf 'com.test.broken\n' ;;
+    esac
+}
+
+execute_optimization launch_agents_cleanup
+execute_optimization saved_state_cleanup
+[[ "$(optimize_outcome_total)" == "2" ]] || exit 1
+[[ "$(optimize_outcome_count failed)" == "1" ]] || exit 1
+[[ "$(optimize_outcome_count unchanged)" == "1" ]] || exit 1
+[[ "$(wc -l < "$HOME/slow-calls.trace" | tr -d ' ')" == "1" ]] || exit 1
+
+optimize_outcomes_reset
+run_with_timeout() { return 130; }
+optimize_task_start
+rc=0
+opt_launch_agents_cleanup || rc=$?
+[[ "$rc" -eq 130 ]]
+EOF
+
+	[[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+	[[ "$output" == *"Timed out inspecting 1 Launch Agent(s)"* ]] || return 1
+	[[ "$output" == *"Launch Agent com.test.broken: program missing at /nonexistent/missing_agent_binary"* ]] || return 1
+	[[ "$output" == *"App saved states optimized"* ]] || return 1
+	[[ "$output" != *"Launch Agents all healthy"* ]]
+}
