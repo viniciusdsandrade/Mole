@@ -251,8 +251,15 @@ run_install_probe_with_timeout() {
     # Stock macOS has no timeout utility, but it does ship Perl. Supervise the
     # probe from outside its process group so a shell wrapper and every child
     # holding inherited output descriptors are terminated at the deadline.
+    # The system perl first, as lib/core/timeout.sh does: a PATH perl can be a
+    # plenv, asdf or perlbrew shim that exits 127 with no version selected, and
+    # check_requirements then read the unstarted sw_vers probe as a failure.
     local perl_bin=""
-    perl_bin=$(command -v perl 2> /dev/null || true)
+    if [[ -x /usr/bin/perl ]]; then
+        perl_bin="/usr/bin/perl"
+    else
+        perl_bin=$(command -v perl 2> /dev/null || true)
+    fi
     [[ -n "$perl_bin" ]] || return 125
     # shellcheck disable=SC2016 # Perl source is intentionally single-quoted.
     "$perl_bin" -MPOSIX=:sys_wait_h,setpgid -MTime::HiRes=time,sleep -e '
