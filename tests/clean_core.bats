@@ -1561,6 +1561,8 @@ mkdir -p "$child" "$sibling" "$unknown_child" "$early_child" "$dup_child" "$newl
 
 for engine in perl bash; do
     if [[ "$engine" == "bash" ]]; then
+        # No perl at all: neither the system perl timeout.sh resolved nor a PATH one.
+        MO_TIMEOUT_PERL_BIN=""
         command() {
             if [[ "${1:-}" == "-v" && "${2:-}" == "perl" ]]; then
                 return 1
@@ -1667,6 +1669,8 @@ render_case() {
 }
 render_case perl mixed
 render_case perl covered
+# No perl at all: neither the system perl timeout.sh resolved nor a PATH one.
+MO_TIMEOUT_PERL_BIN=""
 command() {
     if [[ "${1:-}" == "-v" && "${2:-}" == "perl" ]]; then
         return 1

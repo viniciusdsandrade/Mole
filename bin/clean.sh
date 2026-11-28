@@ -303,8 +303,13 @@ emit_deduplicated_dry_run_ledger() {
         return 0
     fi
 
-    local perl_bin=""
-    perl_bin=$(command -v perl 2> /dev/null || true)
+    # The system perl first, as lib/core/timeout.sh resolves it: a PATH perl
+    # can be a plenv, asdf or perlbrew shim that exits 127 with no version
+    # selected, and the preview then counted nothing and said "already clean".
+    local perl_bin="${MO_TIMEOUT_PERL_BIN:-}"
+    if [[ -z "$perl_bin" || ! -x "$perl_bin" ]]; then
+        perl_bin=$(command -v perl 2> /dev/null || true)
+    fi
     if [[ -n "$perl_bin" && -x "$perl_bin" ]]; then
         # shellcheck disable=SC2016  # Embedded Perl uses Perl variables inside single quotes.
         "$perl_bin" -e '
