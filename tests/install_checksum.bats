@@ -917,6 +917,36 @@ EOF
 	[[ "$output" != *"UNEXPECTED_PROBE_SUCCESS"* ]]
 }
 
+@test "installer probes run the system perl, not a broken PATH shim (#2149)" {
+	# A plenv shim with no version selected: it never runs anything.
+	mole_test_fake_command perl 'echo "plenv: perl: command not found" >&2; exit 127'
+
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mole_source_installer
+# Stock macOS has no timeout binary, so every probe takes the perl branch.
+command() {
+	if [[ "${1:-}" == "-v" && ("${2:-}" == "gtimeout" || "${2:-}" == "timeout") ]]; then
+		return 1
+	fi
+	builtin command "$@"
+}
+probe_rc=0
+run_install_probe_with_timeout 5 /bin/echo PROBE_RAN || probe_rc=$?
+printf 'PROBE_RC=%s\n' "$probe_rc"
+EOF
+
+	[ "$status" -eq 0 ] || {
+		echo "$output"
+		return 1
+	}
+	[[ "$output" == *"PROBE_RAN"* ]] || {
+		echo "$output"
+		return 1
+	}
+	[[ "$output" == *"PROBE_RC=0"* ]]
+}
+
 @test "standalone installer cleans source temp under trailing-slash TMPDIR" {
 	local tmp_root="$HOME/installer-tmp"
 	mkdir -p "$tmp_root"
