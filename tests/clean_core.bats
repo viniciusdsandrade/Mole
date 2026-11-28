@@ -1702,6 +1702,33 @@ EOF
     [[ "$output" == *"MIXED_PREVIEW_EQUAL"* ]] || return 1
 }
 
+@test "dry-run ledger runs the system perl, not a broken PATH shim (#2149)" {
+    # A plenv shim with no version selected: it never runs anything.
+    mole_test_fake_command perl 'echo "plenv: perl: command not found" >&2; exit 127'
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+# Resolve the perl backend again with the shim first in PATH, as a fresh run does.
+unset MO_TIMEOUT_INITIALIZED MO_TIMEOUT_BIN MO_TIMEOUT_PERL_BIN
+source "$PROJECT_ROOT/bin/clean.sh"
+
+DRY_RUN=true
+CLEAN_PREVIEW_FINAL_FILE="$HOME/perl-shim-preview.txt"
+prepare_clean_preview_file
+printf '%s\0%s\0%s\0%s\0%s\0%s\0' "path:/p" 100 1 true "Section" "/p" \
+    >> "$CLEAN_PREVIEW_LEDGER_FILE"
+render_clean_preview_from_ledger
+printf 'TOTAL_KB=%s ITEMS=%s\n' "$total_size_cleaned" "$files_cleaned"
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" == *"TOTAL_KB=100 ITEMS=1"* ]]
+}
+
 @test "dry-run preview propagates live-cache and SQLite safety timeouts" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
         bash --noprofile --norc << 'EOF'
